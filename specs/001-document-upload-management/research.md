@@ -29,18 +29,18 @@
 - **Rationale**: Satisfies offline requirements and the existing cloud-migration abstraction pattern while preventing user filenames or identifiers from becoming arbitrary paths.
 - **Alternatives considered**: Store bytes in LocalDB (unnecessarily couples large binary data and metadata), save under `wwwroot` (web bypasses authorization), persist absolute machine paths (not portable), or add an Azure storage dependency (violates offline/no external runtime service).
 
-### D3. Make malware scanning a required, fail-closed local infrastructure boundary
+### D3. Remove malware scanning from the local training MVP (revised)
 
-- **Decision**: Define `IMalwareScanner` and a configured local-scanner adapter. The adapter receives a staged file through a private, non-web-accessible location and returns a clean/infected/unavailable/error result. The host supplies the installed scanner configuration; no scanner vendor or SDK is hard-coded into business logic. Missing configuration, timeout, scanner error, or threat rejects the upload and cleans the staging file.
-- **Rationale**: The repository contains no scanner product, while the approved requirement explicitly requires a local scanner behind an infrastructure interface and rejection on unavailable/error/threat. Configuration lets the training host choose its installed scanner without introducing a paid, cloud, or package dependency.
-- **Alternatives considered**: No-op scanner or accepting files when scanning fails (explicitly prohibited); cloud scanning service (offline constraint); binding the service to one unspecified vendor (unsupported by repository evidence and harder to replace); adding a scanner package without a chosen provider (not justified).
-- **Operational prerequisite**: A training host must configure a supported local scanner adapter before upload acceptance can be demonstrated. A fake scanner may be used in isolated tests, but it does not replace the required configured local scanner in the running training app.
+- **Decision**: Revised FR-007 removes scanning entirely from the local MVP. Remove the scanner dependency from normal local upload execution instead of registering a fake scanner. Persist successful uploads as `Unscanned`; disclose the lack of malware detection in UI and documentation.
+- **Rationale**: The user explicitly revised the specification after scanner installation was unavailable on the managed training host. This replaces the earlier fail-closed requirement only for the local training MVP.
+- **Alternatives considered**: Optional scanning or a Windows Defender adapter; the user selected no scanning in this MVP. Claiming a fake scan is clean is not an acceptable implementation.
+- **Operational limitation**: Private storage, validation, and authorization do not prove content malware-free. Use trusted training fixtures; do not present the application as production-ready.
 
-### D4. Stage, scan, promote, then persist, with compensating cleanup
+### D4. Stage, promote, then persist, with compensating cleanup
 
-- **Decision**: Validate metadata, size, extension, caller access, and associations first; copy the browser stream to a private staging file; scan it; promote it to a generated permanent relative path; persist metadata; and only then return success. If persistence fails after promotion, delete the promoted object. Replacements scan and promote a new object before switching metadata, then remove the prior object. Record failure/cleanup outcomes.
-- **Rationale**: A filesystem and LocalDB cannot participate in one transaction. This order prevents an unscanned file becoming available and avoids presenting incomplete metadata as a successful upload.
-- **Alternatives considered**: Insert the record before writing the file (can create broken records), expose the file before scan (unsafe), or rely on a distributed transaction (not available for this local architecture).
+- **Decision**: Validate metadata, size, extension, caller access, and associations; stage privately; promote to a generated relative path; commit metadata with `Unscanned` state and the upload audit; then return success. Compensate persistence failure by deleting promoted content. Later replacements preserve this ordering without scanning.
+- **Rationale**: A filesystem and LocalDB cannot share a transaction. This order avoids presenting incomplete uploads as successful; it does not detect malware.
+- **Alternatives considered**: Persisting broken references or relying on a distributed transaction unavailable in the local architecture.
 
 ### D5. Use relational tags, task links, and typed share recipients
 
@@ -80,13 +80,13 @@
 
 ### D11. Use Azure Functions and Queue Storage for asynchronous cloud scanning
 
-- **Decision**: Keep local, synchronous, fail-closed scanning for the training deployment. In Azure deployment, store the uploaded object in private quarantine storage, persist `PendingScan`, and enqueue a `DocumentScanRequested` message for an Azure Functions Queue Storage trigger. The function scans the quarantine object with an `IMalwareScanner` implementation, then promotes it to permanent private storage or sets a terminal rejected/failed state.
+- **Decision**: Local training uploads are unscanned under revised FR-007. Future Azure scanning may stage in quarantine, persist `PendingScan`, and enqueue work for a fail-closed scanner implementation. This future design requires its own schema/runtime changes and does not apply to the local MVP.
 - **Rationale**: Queue-triggered processing avoids blocking the web request on scanner latency and gives bounded retries, poison handling, and monitoring. Queue messages contain identifiers and server-generated references only. The storage and scanner interfaces preserve business-layer independence and permit Azure implementations to replace local implementations without changing pages or authorization logic.
 - **Alternatives considered**: Blocking synchronous scanning in Azure (poor request responsiveness), putting file bytes in queue messages (unsafe and size-limited), exposing quarantine files publicly (bypass authorization), or making Azure dependencies mandatory for the offline training app (violates the constitution and FR-030).
 
 ## Clarifications Resolved
 
-- **Scanner product**: No vendor is required by the approved spec; a host-configured local adapter is used, and it fails closed. This avoids inventing a scanner product absent from the repository.
+- **Local scanning policy**: Revised FR-007 removes the scanner requirement entirely from the local MVP; files are explicitly unscanned. Future Azure scanning is outside this scope.
 - **Team recipient model**: A “team” recipient is an existing project team represented by `ProjectId` and its current members.
 - **Task/document relationship**: A document may be attached to a task; task-uploaded documents inherit the task's project. The same document's task links must remain consistent with its single project association.
 - **Admin content access**: Reporting is admin-only as required; document content remains governed by document-level authorization.

@@ -17,9 +17,9 @@ These are application and browser-facing contracts for the Blazor Server feature
 - Display per-file progress and a distinct success/error result for each file.
 - Each file is an independent document record; a failure for one file must not report it as successful or suppress other results in the batch.
 - Keep the selected file stream open only while copying it into private staging. Do not retain/reuse a disposed browser file stream.
-- Do not show a document in lists, issue a content link, or return success until malware scanning is clean and storage plus metadata persistence have succeeded.
+- For the local training MVP, do not return success or show a document until private storage, metadata, and upload audit persistence succeed. Mark uploads `Unscanned`; do not invoke a scanner or label them clean. Upload and My Documents pages must disclose the lack of malware detection.
 - In Azure deployment, a submitted file enters `PendingScan` and is not publicly or user-visible until a Queue Storage-triggered Azure Function reports a clean terminal result.
-- Reject unsupported extension, oversize/empty file, unauthorized project/task, infected content, scanner unavailable/error/timeout, and storage/database failures with an actionable but non-sensitive message.
+- Reject unsupported extension, oversize/empty file, unauthorized project/task, and storage/database failures with an actionable but non-sensitive message. Local training uploads do not detect infected content or depend on scanner availability.
 - Use a fresh input element state after successful uploads so selecting the same file again is supported.
 
 ## Document service
@@ -28,12 +28,12 @@ The service receives the authenticated caller identity from the UI/endpoint. Res
 
 | Operation | Contract |
 |---|---|
-| Upload one or more files | Validate all fields and associations; authorize; quarantine; persist `PendingScan`; and either scan locally or enqueue `DocumentScanRequested` for Azure Functions. Return success per file only after terminal availability rules are met. |
+| Upload one or more files | In the local training MVP, validate fields and associations; authorize; stage and promote privately; persist metadata with `Unscanned` state and the upload audit event; compensate failures. Do not invoke a scanner. Future Azure scanning uses its separate asynchronous contract below. |
 | List My Documents | Return only documents uploaded by the caller, with title/category/date/size/project and sort/filter support. |
 | List project documents | Require project manager/member access; return only documents associated with that project. |
 | Search | Search title, description, tags, uploader display name, and project name, after applying caller access scope. Never return inaccessible metadata. |
 | Get document details | Return metadata only after the caller passes the document access predicate. |
-| Replace file | Require document owner permission; validate, stage, scan, promote new file, atomically switch metadata reference, clean old file, and audit. Does not create version history. |
+| Replace file | Require document owner permission; validate, stage, promote new file, atomically switch metadata reference, clean old file, and audit. Local training replacements remain `Unscanned`. Does not create version history. |
 | Edit metadata | Owner-only fields: title, description, category, tags. Project/task associations are changed only through separately authorized association operations. |
 | Share/revoke | Require document owner permission. Recipient is one user or one project team; direct recipients/current team members are notified. Revoked shares grant no access. |
 | Delete | Require owner or associated project manager; require explicit UI confirmation, recheck authorization, remove file/metadata safely, and audit. |
@@ -43,7 +43,7 @@ The service receives the authenticated caller identity from the UI/endpoint. Res
 
 Service queries are asynchronous. Related uploader/project/task/share information needed by the result is loaded deliberately, not through accidental lazy-loading.
 
-## Malware scanner abstraction
+## Future scanning-mode abstraction (not used by the local training MVP)
 
 **Input**: readable staged file and cancellation token.  
 **Result**: exactly one of `Clean`, `ThreatDetected`, `Unavailable`, or `Failed` (including timeout).
@@ -51,7 +51,7 @@ Service queries are asynchronous. Related uploader/project/task/share informatio
 - Only `Clean` permits promotion to permanent storage.
 - `ThreatDetected`, `Unavailable`, `Failed`, cancellation, malformed response, and scanner timeout reject the upload.
 - Scanner failure must never fall back to accepting the file.
-- The scanner implementation and configuration are local infrastructure; the business service depends only on the interface.
+- Any future scanner implementation must remain behind an infrastructure interface. The local training MVP does not register or invoke a scanner.
 
 ## Azure asynchronous scan contract
 

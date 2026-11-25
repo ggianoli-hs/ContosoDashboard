@@ -73,7 +73,7 @@ As an employee working on a project task, I want to attach or upload documents f
 
 ### Edge Cases
 
-- What happens when an upload contains a file that is infected or fails malware scanning?
+- The local training MVP does not detect malware in uploaded files. Upload and My Documents pages must disclose that files are unscanned; use only trusted training fixtures.
 - How does the system handle a document whose associated project or uploader is removed or deactivated?
 - What happens when a project member attempts to access or modify a document outside their assigned project?
 - How does the system behave when local disk storage is unavailable or nearly full?
@@ -90,7 +90,7 @@ As an employee working on a project task, I want to attach or upload documents f
 - **FR-004**: Each upload MUST require a title and category and MUST allow an optional description, project, and custom tags.
 - **FR-005**: The system MUST capture upload date and time, uploader, file size, and MIME type as metadata.
 - **FR-006**: The system MUST store MIME type values for up to 255 characters.
-- **FR-007**: The system MUST scan uploaded files for malware before making them available for storage and download. The training implementation MUST access a local scanner through an infrastructure interface, reject uploads when scanning is unavailable or fails, and reject uploads when the scanner reports a threat.
+- **FR-007**: The local training MVP MUST NOT require or invoke malware scanning. Otherwise valid, authorized uploads MUST succeed after file storage, metadata, and upload audit persistence succeed, without a scanner installation or configuration. Uploaded files MUST be represented as unscanned, never as clean or malware-free. Upload and My Documents pages and training documentation MUST explicitly disclose that malware detection is not provided. Metadata/file validation, private storage, authorization, auditing, and failure cleanup remain mandatory.
 - **FR-008**: The system MUST display upload progress and success or error feedback.
 - **FR-009**: Files MUST be stored outside web-accessible directories and served only through authorized application endpoints.
 - **FR-010**: Stored files MUST use generated, non-user-controlled names and portable relative paths.
@@ -117,7 +117,8 @@ As an employee working on a project task, I want to attach or upload documents f
 
 ### Clarifications
 
-- 2026-11-25: Malware scanning MUST use an installed local scanner behind an infrastructure interface. Uploads MUST be rejected if scanning is unavailable or fails and MUST be rejected when the scanner reports a threat.
+- 2026-11-25 (superseded): The initial requirement mandated a fail-closed local scanner.
+- 2026-11-25 (approved revision): Remove malware scanning entirely from the local training MVP. This supersedes the initial scanner prerequisite, not the storage, validation, authorization, audit, or cleanup requirements. Unscanned uploads are a documented training-only limitation, not a production security claim. Optional future Azure scanning is outside this MVP.
 
 ### Key Entities *(include if feature involves data)*
 

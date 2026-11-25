@@ -4,7 +4,7 @@
 
 ### Document
 
-One record per successfully scanned file. The database row is created only after the file has been promoted into the private storage area.
+One record per successfully stored file. In the local training MVP, the database row is created after private storage promotion and committed with the upload audit event; the file is not malware-scanned.
 
 | Field | Type / constraints | Notes |
 |---|---|---|
@@ -19,7 +19,7 @@ One record per successfully scanned file. The database row is created only after
 | `ContentType` | required string, max 255 | Server-validated allowlisted MIME type, not trusted directly from browser input. |
 | `OriginalFileName` | required string, max 255 | Display/download metadata only; never used to construct a storage path. |
 | `RelativeStoragePath` | required string, max 1024 | Generated portable relative path; must resolve under configured private storage root. |
-| `ScanState` | required string, max 30 | `PendingScan`, `Clean`, `Rejected`, or `ScanFailed`. `Clean` is required before the document becomes available. |
+| `ScanState` | required string, max 30 | Local training uploads use `Unscanned`. `PendingScan`, `Clean`, `Rejected`, and `ScanFailed` are reserved for future scanning-mode documents. `Unscanned` does not mean clean or malware-free. |
 
 **Relationships**: many-to-one with `User` as uploader; optional many-to-one with `Project`; one-to-many with `DocumentTag`, `DocumentTask`, and `DocumentShare`.
 
@@ -30,8 +30,8 @@ One record per successfully scanned file. The database row is created only after
 - Allow only `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.txt`, `.jpg`, `.jpeg`, and `.png`. Derive the content type from the accepted extension and reject unsupported/mismatched types according to the implementation allowlist.
 - Reject zero-byte files and files greater than 25 MiB before permanent storage. Do not rely on the client-side limit.
 - Store only generated path segments and a generated identifier; normalize and verify the final resolved path remains inside the configured root.
-- The scanner must return clean before the permanent path can be referenced by a document record.
-- Pending, rejected, and failed documents must remain excluded from lists, search, preview, and download.
+- Local training uploads require no scanner; successful storage and metadata/audit persistence permit availability with `Unscanned` state.
+- Pending, rejected, and failed documents remain excluded from access. `Unscanned` training documents are available only under the normal owner/project/share authorization rules.
 
 ### DocumentTag
 
@@ -106,7 +106,7 @@ Append-oriented record of security-relevant document actions.
 
 ### DocumentScanJob
 
-Used only by the Azure asynchronous deployment mode; the local training implementation may process the same document state synchronously.
+Future Azure asynchronous deployment design only; this entity is not part of the local training MVP.
 
 | Field | Type / constraints | Notes |
 |---|---|---|
@@ -156,9 +156,9 @@ A caller can read document metadata or content if at least one applies:
 
 ### File lifecycle
 
-`Incoming stream → validated → private quarantine/staging → PendingScan → clean promotion or terminal rejection/failure → available/rejected/failed`
+`Incoming stream → validated and authorized → private staging → promotion → metadata and audit commit → available (Unscanned)`
 
-Infected, unavailable, or scanner-error results transition to rejected; the staging object is removed and no available document is created. If metadata persistence fails after promotion, the storage object is deleted as compensation. Replacement does not create version history; the new scanned file replaces the old reference only after it is ready.
+Local training uploads do not invoke a scanner. Validation/storage/database failures must not create an available document; staging content is cleaned up and promoted content is deleted as compensation when persistence fails. Replacement does not create version history; a new validated file replaces the old reference only after storage and persistence succeed. Future Azure scanning retains its separate pending/terminal lifecycle.
 
 ### Referential behavior
 

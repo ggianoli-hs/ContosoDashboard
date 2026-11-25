@@ -5,7 +5,7 @@
 
 ## Summary
 
-Add secure document upload, discovery, preview/download, sharing, task/project integration, dashboard summaries, notifications, and audit/reporting to the existing Blazor Server application. Keep the training app local/offline: persist metadata in SQL Server LocalDB and files outside `wwwroot` behind `IFileStorageService`; scan every upload through a fail-closed local `IMalwareScanner` abstraction before promotion to permanent storage. For Azure deployment, process scans asynchronously through Azure Functions with Azure Queue Storage triggers. Extend the existing Models/Data/Services/Pages structure, and enforce resource permissions in services as well as protected UI and file endpoints. Design details and decisions are in [research.md](research.md).
+Add document upload, discovery, preview/download, sharing, task/project integration, dashboard summaries, notifications, and audit/reporting to the existing Blazor Server application. Keep metadata in LocalDB and files outside `wwwroot` behind `IFileStorageService`. Revised FR-007 removes malware scanning from the local training MVP: validate and authorize uploads, stage/promote privately, and commit metadata and audit before reporting success. Represent these files as `Unscanned` and disclose the lack of malware detection. Future Azure scanning remains outside this MVP.
 
 ## Technical Context
 
@@ -16,7 +16,7 @@ Add secure document upload, discovery, preview/download, sharing, task/project i
 **Target Platform**: Windows training environment with .NET 10 and SQL Server LocalDB; no cloud or external runtime service  
 **Project Type**: Single ASP.NET Core web application (Blazor Server)  
 **Performance Goals**: Meet spec targets: up to 25 MB per file within 30 seconds; lists/search for 500 documents within 2 seconds; PDF/image preview within 3 seconds  
-**Constraints**: Offline-first for training; LocalDB and local disk; max 25 MB per file; supported extensions limited to PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, TXT, JPG/JPEG, PNG; fail closed on scanner unavailable/error/threat; storage remains non-web-accessible; no changes to mock-auth training posture; Azure Functions/Queue Storage is optional and not required by the local training implementation  
+**Constraints**: Offline-first for training; LocalDB and local disk; max 25 MB per file; supported extensions limited to PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, TXT, JPG/JPEG, PNG; no malware scanning in the local MVP; explicit unscanned-file disclosures; storage remains non-web-accessible; no changes to mock-auth training posture; Azure Functions/Queue Storage is future-only
 **Scale/Scope**: Existing dashboard data model and one application; target list/search performance for 500 documents; individual records use integer keys and string category values
 
 ## Constitution Check
@@ -25,15 +25,15 @@ Add secure document upload, discovery, preview/download, sharing, task/project i
 
 ### Before research
 
-- **I. Training-First Scope — PASS**: This is an offline training feature, not a production security claim. Implementation must update README.md to describe document handling, local scanner prerequisites, and remaining training limitations.
-- **II. Offline-First — PASS**: LocalDB and filesystem only; malware scanning is an installed local dependency, not a cloud service. The feature fails closed if it is not configured.
-- **III. Infrastructure Behind Interfaces — PASS**: File storage and malware scanning are accessed through injectable interfaces. The feature does not bind business logic to the filesystem or a scanner vendor.
+- **I. Training-First Scope — PASS WITH IMPLEMENTATION REQUIREMENTS**: Implementation must update README.md and upload/My Documents warnings to disclose the absence of malware scanning. This is not a production security claim.
+- **II. Offline-First — PASS**: LocalDB and filesystem only; no scanner installation or external runtime dependency is required.
+- **III. Infrastructure Behind Interfaces — PASS**: File storage remains behind an injectable interface. No scanner is registered or invoked in the local MVP.
 - **IV. Layered Architecture — PASS**: Models/Data, Services, and Pages/Shared follow the existing application layout; pages and endpoints call services rather than the DbContext.
 - **V. Security by Layered Defense — PASS WITH DESIGN REQUIREMENTS**: Protected pages require authorization; every service operation taking a document/task/project/share identifier verifies caller access; download/preview endpoints authorize independently and never expose the storage root.
 - **VI. Efficient, Consistent Data Access — PASS WITH DESIGN REQUIREMENTS**: Use async EF Core operations, eager-load required related entities, and add indexes for common ownership, project, date, and share filters.
-- **VII. Simplicity and Teaching Clarity — PASS**: Reuse the current service, notification, EF Core, and Blazor patterns. New interfaces exist only for scanner/storage boundaries required by the spec. No new runtime package or framework is planned.
+- **VII. Simplicity and Teaching Clarity — PASS**: Reuse current service, notification, EF Core, and Blazor patterns. The storage boundary is required; the local scanner dependency is removed. No new runtime package or framework is planned.
 
-**Gate result**: No constitution violation identified for the training implementation. Scanner product selection is intentionally deployment configuration because the repository has no scanner dependency and the spec requires a local scanner abstraction, not a vendor. A missing/invalid scanner configuration is a hard upload rejection, never an implicit bypass. Azure Functions and Queue Storage are migration-mode components behind interfaces and are not runtime dependencies of the offline training application.
+**Gate result**: The revised local design preserves the constitution's private infrastructure and layered access-control requirements. Implement the required training-only malware-risk disclosures before claiming completion. This revision changes the malware-scanning requirement explicitly; it does not remove validation, authorization, auditing, or cleanup.
 
 ## Project Structure
 
@@ -60,12 +60,10 @@ ContosoDashboard/
 │   ├── DocumentTag.cs
 │   ├── DocumentTask.cs
 │   ├── DocumentShare.cs
-│   ├── DocumentScanJob.cs
 │   └── DocumentAuditEvent.cs
 ├── Services/
 │   ├── IDocumentService.cs / DocumentService.cs
 │   ├── IFileStorageService.cs / LocalFileStorageService.cs
-│   ├── IMalwareScanner.cs / configured local scanner adapter
 │   ├── DashboardService.cs              # recent documents and count
 │   └── NotificationService.cs           # reuse for document notifications
 ├── Pages/
@@ -74,24 +72,26 @@ ContosoDashboard/
 │   └── [existing project/task pages]    # document panels and task attachment
 ├── Shared/
 │   └── NavMenu.razor                    # document navigation
-└── Program.cs                           # DI, configured storage/scanner, secured file endpoints
+└── Program.cs                           # DI, configured storage, secured file endpoints
 ```
 
 **Structure Decision**: Extend the existing single `ContosoDashboard` project for the training implementation. The listed files are planned placements, not created application code in this planning phase. Keep file storage outside `wwwroot`; browser downloads/previews use authenticated endpoints that delegate authorization and stream retrieval to `IDocumentService`. Azure deployment may add a separate Azure Functions project and Azure Storage implementation, but neither becomes a local runtime dependency. No public REST API or test project is introduced by this plan.
 
 ## Design Overview
 
-1. **Upload pipeline**: Validate metadata, per-file size, and extension; authorize any project/task association; store the file through `IFileStorageService`; create metadata/tags/task links with `PendingScan` state; and keep the file unavailable until scanning succeeds.
-2. **Training scan pipeline**: In the local mode, stage the file privately and call a fail-closed local `IMalwareScanner`. A clean result promotes the file and updates metadata to available; unavailable/error/threat results reject and clean the staging object.
+1. **Upload pipeline**: Validate metadata, size, and extension; authorize associations; stage/promote privately through `IFileStorageService`; commit metadata/tags/task links and upload audit; then report success.
+2. **Training availability**: Store local uploads with `Unscanned` state. No scanner is invoked and no upload is blocked by missing scanner configuration. Disclose that validation and private storage do not detect malware.
 3. **Azure scan pipeline**: In the Azure mode, upload the file to a private quarantine blob container and enqueue a `DocumentScanRequested` message in Azure Queue Storage. An Azure Functions Queue Storage trigger processes the message, scans the quarantined blob, and either promotes it to permanent private storage or rejects/quarantines it.
-4. **Access policy**: Owners can read, edit metadata, replace, share, and delete their documents. Project members can read/download documents for their project; project managers can upload/delete project documents. Explicit user/project-team shares grant read access while active. Documents in `PendingScan`, `Rejected`, or `ScanFailed` state are excluded from lists, search, download, and preview. Administrators can use reporting required by FR-027; broad access to document contents is not added.
+4. **Access policy**: Owners can read, edit metadata, replace, share, and delete their documents. Project members can read/download project documents; managers can upload/delete them. Active direct/team shares grant read access. Successfully persisted `Unscanned` training documents are available under these same rules; pending/rejected/failed scan-mode records remain hidden. Administrator reporting does not grant general content access.
 5. **Discovery**: `IDocumentService` owns authorized My Documents, project, shared, filtered, sorted, and search queries. Search is applied only after the access predicate; do not query all records and filter authorization in the UI.
 6. **Task/project links**: Task associations use a join entity. A task upload inherits the task's project. A document linked to tasks in a project must keep the same project association.
-7. **Replace/delete**: Replacement stages and scans a new file before switching the metadata reference; no file-version history is introduced. Deletion requires explicit confirmation in the UI and is authorized again by the service. Compensating cleanup and audit outcomes must be recorded for storage/database failures.
-8. **Reporting and audit**: Append audit events for uploads, downloads, deletions, shares, rejected uploads, and scan state changes. Admin-only aggregate reports expose the required counts/patterns without granting general document-content access.
+7. **Replace/delete**: Local replacement validates and stages a new file without scanning, switches the reference after persistence, and records `Unscanned` state. No version history is introduced. Deletion requires confirmation and service authorization. Surface/log compensating cleanup and storage/database failures.
+8. **Reporting and audit**: Append audit events for uploads, downloads, deletions, shares, and rejected uploads; local successful uploads explicitly record that malware scanning was not performed. Admin aggregates do not grant content access.
 9. **Repository integration**: Extend the existing in-app notification types/service for shares and new project documents; extend `DashboardSummary` and the dashboard page for the accessible document total and current user's five latest uploads.
 
 ## Azure Functions / Queue Storage Background Scanning
+
+This section describes a future deployment design, not a local MVP requirement. Its scanner, scan-job schema, and pending/terminal rules require a separate implementation plan; they do not apply to unscanned local uploads.
 
 ### Components
 
@@ -128,7 +128,7 @@ Do not store file contents, MIME values supplied by the browser, or original dis
 
 ## Risks and Decisions
 
-- **Scanner availability/product**: No scanner is present in the repository. The local adapter must be configured with a host-installed scanner; scanner absence, timeout, failure, or threat rejects the upload. Verify supported scanner configuration on the training host before implementation testing.
+- **Unscanned-file risk**: The local MVP intentionally does not detect malware. Use trusted training fixtures only; disclose this limitation in UI and README. Never label an unscanned file clean or imply that extension validation protects against malware.
 - **Asynchronous Azure scan consistency**: Queue delivery and Blob/SQL updates cannot share a distributed transaction. Use pending/terminal scan states, stable correlation/DocumentId keys, idempotent Function processing, retry/redelivery, poison handling, and quarantine cleanup. Never expose a pending or failed scan.
 - **Queue/poison security**: Queue messages contain identifiers only, not file bytes or user-controlled names. Blob containers remain private; managed identity/RBAC is required. Poison messages must not become public links or grant scan/delivery access.
 - **Local file/database consistency**: Filesystem and LocalDB cannot share a transaction. Stage/promote/compensate as described above; do not return upload success until both file and metadata are committed. Log cleanup failures for manual recovery; never return a failed/orphaned upload as successful.
@@ -138,16 +138,16 @@ Do not store file contents, MIME values supplied by the browser, or original dis
 
 ## Complexity Tracking
 
-No constitution violations for the offline training implementation. Azure Functions and Queue Storage are planned only as a future deployment mode behind existing storage/scanner interfaces, with an optional Azure Storage implementation. The storage and scanner interfaces, pending/terminal scan state, audit entity, and task/share relationships are required to satisfy the feature and existing architectural principles.
+The local MVP keeps private storage behind an interface and preserves audit/task/share models. Removing scanning simplifies the training runtime but requires explicit malware-risk disclosures. Azure Functions, scanner interfaces, scan jobs, and pending/terminal processing are future design only, not required local components.
 
 ## Post-design Constitution Check
 
 - **I**: PASS — training-only behavior and README update requirement retained.
-- **II**: PASS FOR TRAINING — LocalDB, local filesystem, and configured local scanner only; Azure Functions/Queue Storage is explicitly optional and outside the offline runtime path.
-- **III**: PASS — storage and scanner implementations are behind DI interfaces. Azure implementations are isolated for deployment migration.
+- **II**: PASS FOR TRAINING — LocalDB and local filesystem only; no scanner prerequisite; Azure is outside the local runtime.
+- **III**: PASS — local storage remains behind a DI interface; no concrete scanner dependency is added.
 - **IV**: PASS — data access and access rules remain in Services; pages/endpoints do not use `ApplicationDbContext`.
 - **V**: PASS — authorization applies at protected pages, endpoint, and every resource service operation; user-visible search is authorization-scoped.
 - **VI**: PASS — asynchronous database and file operations, explicit eager loading, and query indexes are part of the design.
 - **VII**: PASS — uses existing layers/patterns; no framework or package additions are required.
 
-**Final gate result**: PASS. No unresolved technical clarification remains; the local scanner vendor is deliberately supplied by host configuration and a missing provider fails closed.
+**Final gate result**: Revised design requires unscanned-training warnings and matching README changes alongside the code update. Validate successful unscanned persistence and existing authorization/cleanup behavior before claiming the MVP complete.

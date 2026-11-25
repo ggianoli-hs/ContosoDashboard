@@ -1,0 +1,93 @@
+@page "/documents"
+@using System.Security.Claims
+@attribute [Authorize]
+@inject IDocumentService DocumentService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>My Documents - ContosoDashboard</PageTitle>
+
+<div class="container-fluid">
+    <div class="row align-items-center mb-4">
+        <div class="col">
+            <h1>My Documents</h1>
+            <p class="text-muted">Only successfully saved documents uploaded by you are shown.</p>
+        </div>
+        <div class="col-auto">
+            <a class="btn btn-primary" href="/documents/upload">
+                <i class="bi bi-upload" aria-hidden="true"></i> Upload Documents
+            </a>
+        </div>
+    </div>
+
+    <div class="alert alert-warning" role="alert">
+        Training only: new uploads are unscanned. This application does not detect malware.
+        Private storage and authorization do not prove that a file is safe.
+    </div>
+
+    @if (isLoading)
+    {
+        <p><em>Loading documents…</em></p>
+    }
+    else if (documents.Count == 0)
+    {
+        <div class="alert alert-info">
+            You do not have any successfully saved documents yet. <a href="/documents/upload">Upload a document</a>.
+        </div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Category</th>
+                        <th>Uploaded</th>
+                        <th>Size</th>
+                        <th>Project</th>
+                        <th>Tags</th>
+                        <th>Scan state</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var document in documents)
+                    {
+                        <tr>
+                            <td>@document.Title</td>
+                            <td>@document.Category</td>
+                            <td>@document.UploadedUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</td>
+                            <td>@FormatSize(document.SizeBytes)</td>
+                            <td>@(document.ProjectName ?? "Personal")</td>
+                            <td>@string.Join(", ", document.Tags)</td>
+                            <td>@document.ScanState</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<DocumentSummary> documents = new();
+    private bool isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst(ClaimTypes.NameIdentifier);
+        if (idClaim is not null && int.TryParse(idClaim.Value, out var userId) && userId > 0)
+        {
+            documents = (await DocumentService.GetMyDocumentsAsync(userId)).ToList();
+        }
+
+        isLoading = false;
+    }
+
+    private static string FormatSize(long sizeBytes)
+    {
+        return sizeBytes >= 1024 * 1024
+            ? $"{sizeBytes / (1024d * 1024d):0.##} MiB"
+            : $"{sizeBytes / 1024d:0.##} KiB";
+    }
+}

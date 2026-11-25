@@ -1,13 +1,19 @@
 # Quickstart: Document Upload and Management
 
-This guide validates the planned feature end to end in the local training app. It does not configure a cloud service or bypass malware scanning. See [the data model](data-model.md) and [the contract](contracts/document-management.md) for access and failure behavior.
+This guide describes validation of the revised local training MVP, which does not perform malware scanning. Use only trusted training fixtures; private storage and input validation do not prove content safe. See [the specification](spec.md), [data model](data-model.md), and [contract](contracts/document-management.md).
 
 ## Prerequisites
 
 - Windows training machine with .NET 10 SDK and SQL Server LocalDB available.
 - Repository at the feature branch and a clean, disposable LocalDB database. The application uses `EnsureCreated()`; it does not migrate an existing database when new entities are introduced.
-- A locally installed malware scanner and the implementation's configured scanner adapter. Uploads must fail closed until this adapter reports a clean result. For service-level tests, an isolated fake scanner may return deterministic clean/threat/unavailable results; do not register a fake scanner in normal application runs.
+- No malware scanner installation or configuration is required by revised FR-007. Files must be explicitly represented as unscanned, and upload/My Documents pages must disclose that malware detection is not provided.
 - The application has mock authentication accounts for System Administrator, Camille Nicole (Project Manager), Floris Kregel (Team Lead), and Ni Kang (Employee). Mock authentication is training-only.
+
+## Revised training behavior
+
+Scanner installation was unavailable on the managed training machine. The user subsequently approved removing scanning entirely from the local training MVP rather than substituting a fake scanner or claiming a clean scan.
+
+The local MVP no longer invokes a scanner. Successful uploads are stored as `Unscanned`, with warnings on upload and My Documents pages. If you still see the old scanner-unavailable message, restart the application with the rebuilt code. Do not register a fake scanner or mark unscanned files clean.
 
 ## Start with an isolated database
 
@@ -21,67 +27,61 @@ dotnet run --project .\ContosoDashboard\ContosoDashboard.csproj
 
 Open the HTTPS URL printed by `dotnet run` and sign in through the training login page. On first start, `EnsureCreated()` creates the isolated schema and seed records. Stop the app with Ctrl+C when finished. Do not remove the LocalDB instance to reset the feature database; use a different disposable database name if you need a clean run.
 
+Use a database name that has not been used by the original scanner-gated MVP. Its old `ScanState` check constraint does not permit `Unscanned`, and `EnsureCreated()` will not update it. The application does not automatically migrate or delete existing data.
+
 ## Validation scenarios
 
-### 1. Upload, scan, and verify metadata
+### 1. Unscanned training upload
+
+With no scanner installed or configured:
 
 1. Sign in as Ni Kang and open Documents → Upload.
-2. Select an allowed PDF or image up to 25 MiB. Enter a title and category; optionally enter a description, project 1, and tags.
-3. Submit and observe per-file progress, then success.
-4. Open My Documents and verify the title, category, timestamp, file size, and project are displayed. Reopen the record and verify metadata and the authorized preview/download work.
-5. Confirm the file exists under the configured private storage root and not under `wwwroot`; its stored name is generated and the database path is relative.
+2. Select a supported file no larger than 25 MiB. Enter a title and category; optionally enter a description and tags.
+3. Submit and verify the per-file result reports success.
+4. Open My Documents and verify the title, category, timestamp, size, and tags.
+5. Confirm the file is stored under the configured private root, outside `wwwroot`, using a generated name and relative database path.
 
-**Expected**: A clean scan and successful storage/database writes produce one visible document and an upload audit event. No browser URL or page exposes the physical storage root.
+**Expected**: Validation, authorization, storage, and metadata/audit persistence produce a visible document with `ScanState = Unscanned`. UI warnings disclose the absence of malware scanning; neither UI nor audit describes the upload as scanned/clean. The current MVP does not include document detail, preview, or download.
 
-### 2. Validation and fail-closed scanning
+### 2. Validation, authorization, and failure cleanup
 
-1. Attempt a file larger than 25 MiB, an unsupported extension, and a zero-byte file.
-2. With the local scanner configuration unavailable, attempt an otherwise valid upload.
-3. If the configured scanner supports a harmless threat-test fixture, submit it in an isolated training database.
+1. Attempt a file larger than 25 MiB, an unsupported extension, and a zero-byte file. If the browser file picker prevents selecting an unsupported extension, record that case as not manually exercised.
+2. Try submitting with a missing title/category and with a tag longer than 100 characters. Confirm required fields and service validation prevent an upload.
+3. Attempt a project upload as a user who is not the project manager; confirm it is rejected.
+4. Test storage/persistence failure only using a disposable test database and dedicated storage root; confirm the result is not reported as successful.
+5. If inspecting the disposable database and private storage root, confirm rejected attempts create no visible `Document` row or permanent file, staged content is cleaned up, and rejected-upload audit events are recorded.
 
-**Expected**: The size, extension, and empty-file checks reject input with clear messages. Scanner unavailable/error/threat also rejects; no document appears as uploaded and no permanent content is available. Temporary files are cleaned, and failure/cleanup outcomes are observable in logs/audit as designed.
+**Expected**: Invalid or unauthorized uploads fail with actionable messages. Storage/persistence failures are surfaced and cleanup failures logged; no incomplete upload is presented as successful. Scanner availability has no effect on the revised local training upload flow.
 
-### 3. Authorization for browse, preview, and download
+### 3. MVP authentication and My Documents isolation
 
-1. Sign in as a project member or project manager and browse documents for project 1.
-2. Sign in as an unrelated employee and try the same project/document URL, search query, download route, and preview route.
-3. Sign out and request a content route.
+1. While signed out, request `/documents` and `/documents/upload`; confirm the app redirects or challenges to the training login page.
+2. Sign in as Ni Kang and upload a trusted training file.
+3. Sign in as a different user and confirm Ni Kang's document does not appear in My Documents. Upload a second file for that user and verify each owner sees only their own uploads, including `Unscanned` documents.
 
-**Expected**: The project member/manager can access project documents; an unrelated user receives no document metadata or bytes (missing and unauthorized resources have the same not-found response); an unauthenticated user is challenged. Hiding a page button is not the authorization check.
+**Expected**: Protected pages require authentication and My Documents does not reveal another user's documents. This MVP has no document-ID detail, preview, or download route, so IDOR/content-route checks are deferred.
 
-### 4. Search, filters, sharing, and task association
+### 4. Deferred beyond the current MVP
 
-1. Search for a document by title, description, tag, uploader, and project; sort and filter My Documents by category and date.
-2. As the document owner, share a document with a user and, separately, with a project team.
-3. Sign in as a recipient and verify the share notification and Shared with Me entry. Revoke a share and verify further access is denied.
-4. Open an authorized task with a project, upload/attach a document from its details, and verify the task link and inherited project.
+Project browsing, search, preview/download, sharing, replacement/deletion, task integration, dashboard/reporting, and their related authorization checks are not part of T001–T017. Validate these after their implementation tasks are completed.
 
-**Expected**: Only authorized matches are returned; shared recipients can access only active grants; a task-linked document uses the task's project and cannot be attached to a different project.
+## Deferred performance checks
 
-### 5. Replace, delete, dashboard, audit, and reporting
-
-1. Replace an owned document with a different supported file and verify the new scanned content is served while the prior file is cleaned up; verify no version history is exposed.
-2. Confirm deletion in the UI and verify metadata/content are removed and the delete audit event remains.
-3. Upload several documents as the current user. Verify the dashboard shows their five newest uploads and the accessible document total.
-4. Sign in as Administrator and use the document report for most-uploaded types, active uploaders, and access patterns. Attempt to download a document not otherwise accessible to the administrator.
-
-**Expected**: Replacement and deletion require service authorization; audit events remain queryable. The dashboard data is caller-scoped. Administrator reporting is available, but report permission alone does not grant document-content access.
-
-## Performance checks
-
-Measure in the local training environment with 500 documents and representative tags/project links:
+List/search/preview checks require their later implementation. Upload timing can be measured for the revised MVP without a scanner. Use representative test data and record the environment:
 
 - Document list and search each complete within 2 seconds.
 - PDF/image preview loads within 3 seconds.
-- A 25 MiB upload, including scanning and persistence, completes within 30 seconds on the representative network.
+- A 25 MiB training upload, including private storage and persistence but no malware scan, completes within 30 seconds on the representative network.
 
-Capture environment and scanner timing when a goal is not met; do not weaken authorization or scan requirements to improve a timing result.
+Capture environment and storage/persistence timing when a goal is not met; do not weaken authorization or input validation to improve a timing result.
 
 ## Build/test note
 
-The repository currently has no test project. `dotnet build` is the available automated repository-level validation before feature-specific tests are introduced. Implementations should add focused service/storage tests for authorization, path confinement, compensation, and each scanner result; continue the existing README security scenarios for authentication, user isolation, IDOR, and role behavior.
+The repository currently has no test project. `dotnet build` is the available automated repository-level validation. Verify upload acceptance without a scanner, explicit `Unscanned` state/disclosures, tag normalization, authorization, path confinement, and compensation. Continue the existing README security scenarios for authentication, user isolation, IDOR, and role behavior.
 
 ## Azure asynchronous scanning validation (optional deployment mode)
+
+Future design only; it is not implemented or required by the revised local training MVP.
 
 When Azure Storage and Azure Functions are configured:
 
