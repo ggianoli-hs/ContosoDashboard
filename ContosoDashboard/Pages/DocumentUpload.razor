@@ -1,0 +1,275 @@
+@page "/documents/upload"
+@using System.Security.Claims
+@attribute [Authorize]
+@inject IDocumentService DocumentService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILogger<DocumentUpload> Logger
+
+<PageTitle>Upload Documents - ContosoDashboard</PageTitle>
+
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1>Upload Documents</h1>
+            <p class="text-muted">Files remain private and are available after a successful upload.</p>
+        </div>
+    </div>
+
+    <div class="alert alert-warning" role="alert">
+        Training only: uploaded files are unscanned. This application does not detect malware.
+        Upload only trusted training files.
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(pageMessage))
+    {
+        <div class="alert @pageMessageClass" role="status">@pageMessage</div>
+    }
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <form @onsubmit="SubmitUploadsAsync" @onsubmit:preventDefault>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label" for="documentTitle">Title <span class="text-danger">*</span></label>
+                        <input id="documentTitle" class="form-control" maxlength="255" @bind="title" required />
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label" for="documentCategory">Category <span class="text-danger">*</span></label>
+                        <select id="documentCategory" class="form-select" @bind="category" required>
+                            <option value="">Select a category</option>
+                            @foreach (var item in DocumentCategories.All)
+                            {
+                                <option value="@item">@item</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="documentDescription">Description</label>
+                    <textarea id="documentDescription" class="form-control" rows="3" maxlength="2000"
+                              @bind="description"></textarea>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label" for="projectId">Project ID (optional)</label>
+                        <InputNumber id="projectId" class="form-control" @bind-Value="projectId" />
+                        <div class="form-text">Project uploads are currently limited to the project manager.</div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label" for="documentTags">Tags (comma-separated, optional)</label>
+                        <input id="documentTags" class="form-control" maxlength="1000" @bind="tagsInput" />
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="documentFiles">Files</label>
+                    <InputFile @key="fileInputKey"
+                               id="documentFiles"
+                               OnChange="FilesSelected"
+                               multiple
+                               accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.jpg,.jpeg,.png"
+                               disabled="@isUploading" />
+                    <div class="form-text">Supported formats: PDF, Word, Excel, PowerPoint, TXT, JPEG, PNG. Maximum 25 MiB per file.</div>
+                </div>
+
+                <button class="btn btn-primary" type="submit" disabled="@(!selectedFiles.Any() || isUploading)">
+                    @if (isUploading)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        <span>Uploading…</span>
+                    }
+                    else
+                    {
+                        <span>Upload selected files</span>
+                    }
+                </button>
+                <a class="btn btn-outline-secondary ms-2" href="/documents">My Documents</a>
+            </form>
+        </div>
+    </div>
+
+    @if (selectedFiles.Any())
+    {
+        <div class="card mb-4">
+            <div class="card-header">Selected files</div>
+            <ul class="list-group list-group-flush">
+                @foreach (var file in selectedFiles)
+                {
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>@file.Name</span>
+                        <span class="text-muted">@FormatSize(file.Size)</span>
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+
+    @if (uploadResults.Any())
+    {
+        <section aria-live="polite">
+            <h2 class="h4">Upload results</h2>
+            <div class="list-group">
+                @foreach (var result in uploadResults)
+                {
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between">
+                            <strong>@result.FileName</strong>
+                            <span class="badge @(result.Succeeded ? "bg-success" : "bg-danger")">@result.Status</span>
+                        </div>
+                        <div>@result.Message</div>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const long MaximumUploadBytes = 25L * 1024 * 1024;
+    private string title = string.Empty;
+    private string category = string.Empty;
+    private string? description;
+    private string tagsInput = string.Empty;
+    private int? projectId;
+    private int currentUserId;
+    private int fileInputKey;
+    private bool isUploading;
+    private string? pageMessage;
+    private string pageMessageClass = "alert-info";
+    private IReadOnlyList<IBrowserFile> selectedFiles = Array.Empty<IBrowserFile>();
+    private readonly List<FileUploadStatus> uploadResults = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst(ClaimTypes.NameIdentifier);
+        if (idClaim is not null && int.TryParse(idClaim.Value, out var userId))
+        {
+            currentUserId = userId;
+        }
+    }
+
+    private void FilesSelected(InputFileChangeEventArgs eventArgs)
+    {
+        try
+        {
+            selectedFiles = eventArgs.GetMultipleFiles(100);
+            uploadResults.Clear();
+            pageMessage = null;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            selectedFiles = Array.Empty<IBrowserFile>();
+            pageMessageClass = "alert-warning";
+            pageMessage = "Select no more than 100 files at a time.";
+        }
+    }
+
+    private async Task SubmitUploadsAsync()
+    {
+        if (isUploading || currentUserId <= 0 || !selectedFiles.Any())
+        {
+            pageMessageClass = "alert-warning";
+            pageMessage = currentUserId <= 0
+                ? "Your sign-in could not be verified. Sign in again before uploading."
+                : "Select at least one file to upload.";
+            return;
+        }
+
+        isUploading = true;
+        pageMessage = null;
+        uploadResults.Clear();
+        var anySucceeded = false;
+        try
+        {
+            foreach (var browserFile in selectedFiles)
+            {
+                var status = new FileUploadStatus(browserFile.Name, "Uploading…", false,
+                    "The file is being validated and saved. Malware scanning is not performed.");
+                uploadResults.Add(status);
+                await InvokeAsync(StateHasChanged);
+
+                try
+                {
+                    if (browserFile.Size > MaximumUploadBytes)
+                    {
+                        var oversizedResult = await DocumentService.UploadAsync(
+                            CreateRequest(browserFile, Stream.Null), currentUserId);
+                        status.Apply(oversizedResult);
+                    }
+                    else
+                    {
+                        await using var content = browserFile.OpenReadStream(MaximumUploadBytes);
+                        var result = await DocumentService.UploadAsync(
+                            CreateRequest(browserFile, content), currentUserId);
+                        status.Apply(result);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Logger.LogError(exception, "Could not read or upload a document for caller {UserId}.",
+                        currentUserId);
+                    status.Succeeded = false;
+                    status.Status = "Failed";
+                    status.Message = "The file could not be read or uploaded. Select it again and retry.";
+                }
+
+                if (status.Succeeded)
+                {
+                    anySucceeded = true;
+                }
+            }
+
+            if (anySucceeded)
+            {
+                fileInputKey++;
+                selectedFiles = Array.Empty<IBrowserFile>();
+                pageMessageClass = "alert-success";
+                pageMessage = "One or more files were uploaded successfully. Rejected files are not available in My Documents.";
+            }
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private DocumentUploadRequest CreateRequest(IBrowserFile file, Stream content)
+    {
+        var tags = tagsInput.Split(',', StringSplitOptions.None);
+        return new DocumentUploadRequest(
+            title,
+            description,
+            category,
+            projectId,
+            null,
+            file.Name,
+            file.Size,
+            tags,
+            content);
+    }
+
+    private static string FormatSize(long sizeBytes)
+    {
+        return sizeBytes >= 1024 * 1024
+            ? $"{sizeBytes / (1024d * 1024d):0.##} MiB"
+            : $"{sizeBytes / 1024d:0.##} KiB";
+    }
+
+    private sealed class FileUploadStatus(string fileName, string status, bool succeeded, string message)
+    {
+        public string FileName { get; } = fileName;
+        public string Status { get; set; } = status;
+        public bool Succeeded { get; set; } = succeeded;
+        public string Message { get; set; } = message;
+
+        public void Apply(DocumentUploadResult result)
+        {
+            Succeeded = result.Succeeded;
+            Status = result.Succeeded ? "Available (unscanned)" : "Rejected";
+            Message = result.Message;
+        }
+    }
+}

@@ -17,6 +17,11 @@ public class ApplicationDbContext : DbContext
     public DbSet<Notification> Notifications { get; set; } = null!;
     public DbSet<ProjectMember> ProjectMembers { get; set; } = null!;
     public DbSet<Announcement> Announcements { get; set; } = null!;
+    public DbSet<Document> Documents { get; set; } = null!;
+    public DbSet<DocumentTag> DocumentTags { get; set; } = null!;
+    public DbSet<DocumentTask> DocumentTasks { get; set; } = null!;
+    public DbSet<DocumentShare> DocumentShares { get; set; } = null!;
+    public DbSet<DocumentAuditEvent> DocumentAuditEvents { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +68,129 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<User>()
             .HasIndex(u => u.Email)
             .IsUnique();
+
+        modelBuilder.Entity<Document>()
+            .HasOne(d => d.Uploader)
+            .WithMany(u => u.UploadedDocuments)
+            .HasForeignKey(d => d.UploaderId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Document>()
+            .HasOne(d => d.Project)
+            .WithMany(p => p.Documents)
+            .HasForeignKey(d => d.ProjectId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Document>()
+            .ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_Document_SizeBytes",
+                    "[SizeBytes] > 0 AND [SizeBytes] <= 26214400");
+                table.HasCheckConstraint(
+                    "CK_Document_ScanState",
+                    "[ScanState] IN ('Unscanned', 'PendingScan', 'Clean', 'Rejected', 'ScanFailed')");
+                table.HasCheckConstraint(
+                    "CK_Document_Category",
+                    "[Category] IN ('Project Documents', 'Team Resources', 'Personal Files', 'Reports', 'Presentations', 'Other')");
+            });
+
+        modelBuilder.Entity<Document>()
+            .HasIndex(d => new { d.UploaderId, d.UploadedUtc });
+        modelBuilder.Entity<Document>()
+            .HasIndex(d => new { d.ProjectId, d.UploadedUtc });
+        modelBuilder.Entity<Document>()
+            .HasIndex(d => new { d.Category, d.UploadedUtc });
+        modelBuilder.Entity<Document>()
+            .HasIndex(d => d.ScanState);
+
+        modelBuilder.Entity<DocumentTag>()
+            .HasOne(t => t.Document)
+            .WithMany(d => d.Tags)
+            .HasForeignKey(t => t.DocumentId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DocumentTag>()
+            .HasIndex(t => new { t.DocumentId, t.NormalizedTag })
+            .IsUnique();
+        modelBuilder.Entity<DocumentTag>()
+            .HasIndex(t => t.NormalizedTag);
+
+        modelBuilder.Entity<DocumentTask>()
+            .HasKey(link => new { link.DocumentId, link.TaskId });
+        modelBuilder.Entity<DocumentTask>()
+            .HasOne(link => link.Document)
+            .WithMany(document => document.DocumentTasks)
+            .HasForeignKey(link => link.DocumentId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DocumentTask>()
+            .HasOne(link => link.Task)
+            .WithMany(task => task.DocumentTasks)
+            .HasForeignKey(link => link.TaskId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DocumentTask>()
+            .HasOne(link => link.LinkedByUser)
+            .WithMany(user => user.DocumentTasksLinked)
+            .HasForeignKey(link => link.LinkedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentTask>()
+            .HasIndex(link => new { link.TaskId, link.DocumentId });
+
+        modelBuilder.Entity<DocumentShare>()
+            .HasOne(share => share.Document)
+            .WithMany(document => document.Shares)
+            .HasForeignKey(share => share.DocumentId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DocumentShare>()
+            .HasOne(share => share.SharedByUser)
+            .WithMany(user => user.DocumentSharesCreated)
+            .HasForeignKey(share => share.SharedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentShare>()
+            .HasOne(share => share.RecipientUser)
+            .WithMany(user => user.DocumentSharesReceived)
+            .HasForeignKey(share => share.RecipientUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentShare>()
+            .HasOne(share => share.RecipientProject)
+            .WithMany(project => project.DocumentShares)
+            .HasForeignKey(share => share.RecipientProjectId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentShare>()
+            .HasOne(share => share.RevokedByUser)
+            .WithMany(user => user.DocumentSharesRevoked)
+            .HasForeignKey(share => share.RevokedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentShare>()
+            .ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_DocumentShare_ExactlyOneRecipient",
+                    "(RecipientUserId IS NOT NULL AND RecipientProjectId IS NULL) OR (RecipientUserId IS NULL AND RecipientProjectId IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_DocumentShare_RevocationState",
+                    "(IsActive = 1 AND RevokedUtc IS NULL AND RevokedByUserId IS NULL) OR (IsActive = 0 AND RevokedUtc IS NOT NULL AND RevokedByUserId IS NOT NULL)");
+            });
+        modelBuilder.Entity<DocumentShare>()
+            .HasIndex(share => new { share.RecipientUserId, share.IsActive, share.DocumentId })
+            .IsUnique()
+            .HasFilter("[IsActive] = 1 AND [RecipientUserId] IS NOT NULL");
+        modelBuilder.Entity<DocumentShare>()
+            .HasIndex(share => new { share.RecipientProjectId, share.IsActive, share.DocumentId })
+            .IsUnique()
+            .HasFilter("[IsActive] = 1 AND [RecipientProjectId] IS NOT NULL");
+
+        modelBuilder.Entity<DocumentAuditEvent>()
+            .HasOne(audit => audit.ActorUser)
+            .WithMany(user => user.DocumentAuditEvents)
+            .HasForeignKey(audit => audit.ActorUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DocumentAuditEvent>()
+            .ToTable(table => table.HasCheckConstraint(
+                "CK_DocumentAuditEvent_Action",
+                "[Action] IN ('Upload', 'UploadRejected', 'Download', 'Delete', 'Share')"));
+        modelBuilder.Entity<DocumentAuditEvent>()
+            .HasIndex(audit => new { audit.OccurredUtc, audit.Action });
+        modelBuilder.Entity<DocumentAuditEvent>()
+            .HasIndex(audit => new { audit.ActorUserId, audit.OccurredUtc });
 
         // Seed initial data
         SeedData(modelBuilder);

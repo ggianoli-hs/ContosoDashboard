@@ -51,7 +51,7 @@ All Contoso employees who use the ContosoDashboard application will have access 
 
 **Validation and Security**
 
-- System must scan uploaded files for viruses and malware before storage
+- Revised local training MVP: uploads do not perform virus or malware scanning and require no scanner installation. Upload and My Documents pages must explicitly disclose that files are unscanned; validation, authorization, private storage, auditing, and failure cleanup remain required. Future Azure scanning is outside this MVP.
 - System must reject files that exceed size limits with clear error messages
 - System must reject unsupported file types
 - Uploaded files must be stored securely with appropriate access controls
